@@ -70,7 +70,8 @@ Query: What is 2+2?
 Route decided: SIMPLE -> using model: accounts/fireworks/models/qwen3p7-plus
 Response: 2 + 2 = 4
 Tokens used: 322
-Query: Explain how neural networks learn and why backpropagation works
+
+Query: Explain how neural networks learn...
 Route decided: COMPLEX -> using model: accounts/fireworks/models/deepseek-v4-pro
 Response: Neural networks learn by adjusting their internal parameters...
 Tokens used: 1986
