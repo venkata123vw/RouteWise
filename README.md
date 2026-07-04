@@ -54,8 +54,11 @@ We measured actual token usage per query to validate our final approach and chos
 ```bash
 git clone https://github.com/venkata123vw/RouteWise.git
 cd RouteWise
+```
+
 2. Create a `.env` file with your Fireworks API key:
-FIREWORKS_API_KEY=your_key_here
+   FIREWORKS_API_KEY=your_key_here
+
 3. Build and run:
 ```bash
 docker build -t routewise .
@@ -75,6 +78,3 @@ Tokens used: 1986
 ## Built By
 Venkata Varshith — Team RouteWise  
 AMD Developer Hackathon: Act II, Track 1
-```
-
-2. Create a `.env` file with your Fireworks API key:
