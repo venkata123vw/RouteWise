@@ -1,120 +1,326 @@
 from dotenv import load_dotenv
 import os
+import time
 import requests
 
 load_dotenv()
 fireworks_api_key = os.getenv("FIREWORKS_API_KEY")
-hf_api_key = os.getenv("HF_API_KEY")
 
 fireworks_url = "https://api.fireworks.ai/inference/v1/chat/completions"
-hf_url = "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli"
 
 fireworks_headers = {
     "Authorization": f"Bearer {fireworks_api_key}",
     "Content-Type": "application/json"
 }
 
-hf_headers = {
-    "Authorization": f"Bearer {hf_api_key}"
+# ---- Models ----
+SIMPLE_MODEL  = "accounts/fireworks/models/qwen3p7-plus"
+COMPLEX_MODEL = "accounts/fireworks/models/deepseek-v4-pro"
+
+# ---- Cost per token (USD) ----
+COST_PER_TOKEN = {
+    "simple":  0.0000009,
+    "complex": 0.0000027
+}
+
+# ---- Confidence threshold ----
+CONFIDENCE_THRESHOLD = 7
+
+# ---- Budget (USD) ----
+TOTAL_BUDGET = 0.05
+
+# ---- Session state ----
+session = {
+    "total_queries":    0,
+    "simple_count":     0,
+    "complex_count":    0,
+    "escalated_count":  0,
+    "total_tokens":     0,
+    "total_cost":       0.0,
+    "total_saved":      0.0,
+    "budget_remaining": TOTAL_BUDGET,
+    "log": []
 }
 
 
-# ---- OPTION 1: Rule-based classifier (keyword + word count) ----
-def classify_query_rules(query):
-    query_lower = query.lower()
-    word_count = len(query.split())
-
-    complex_keywords = [
-        "explain", "why", "analyze", "compare", "design",
-        "philosophical", "reasoning", "evaluate", "summarize",
-        "strategy", "architecture", "optimize"
-    ]
-
-    has_complex_keyword = any(word in query_lower for word in complex_keywords)
-
-    if word_count > 15 or has_complex_keyword:
-        return "complex"
-    else:
-        return "simple"
-
-
-# ---- OPTION 2: AI-based classifier (Hugging Face zero-shot) ----
-def classify_query_ai(query):
-    payload = {
-        "inputs": query,
-        "parameters": {
-            "candidate_labels": ["simple question", "complex question"]
-        }
+# ----------------------------------------------------------------
+# STEP 1: AI CLASSIFIER
+# ----------------------------------------------------------------
+def classify_query(query):
+    time.sleep(2)
+    data = {
+        "model": SIMPLE_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Classify the user query as either 'simple' or 'complex'.\n"
+                    "Simple: factual, short, single-step, or common knowledge.\n"
+                    "Complex: requires reasoning, comparison, explanation, or multi-step thinking.\n"
+                    "Reply with exactly one word: simple or complex."
+                )
+            },
+            {"role": "user", "content": query}
+        ],
+        "max_tokens": 5
     }
-
-    response = requests.post(hf_url, headers=hf_headers, json=payload)
-    result = response.json()
-
     try:
-        # result is a LIST like [{"label": "...", "score": ...}, ...]
-        top_label = result[0]["label"]
-        if "simple" in top_label:
+        response = requests.post(fireworks_url, headers=fireworks_headers, json=data)
+        result = response.json()
+        label = result["choices"][0]["message"]["content"].strip().lower()
+        if "complex" in label:
+            return "complex"
+        elif "simple" in label:
             return "simple"
         else:
-            return "complex"
-    except (KeyError, IndexError, TypeError):
-        print("Hugging Face classification failed, falling back to rule-based.")
+            return classify_query_rules(query)
+    except Exception:
         return classify_query_rules(query)
 
 
-# ---- Pick which model to use based on route ----
-def get_model_for_route(route):
-    if route == "simple":
-        return "accounts/fireworks/models/qwen3p7-plus"
-    else:
-        return "accounts/fireworks/models/deepseek-v4-pro"
+# Fallback rule-based classifier
+def classify_query_rules(query):
+    query_lower = query.lower()
+    word_count = len(query.split())
+    complex_keywords = [
+        "explain", "why", "analyze", "compare", "design",
+        "reasoning", "evaluate", "summarize", "strategy",
+        "architecture", "optimize", "tradeoff", "how does",
+        "mechanism", "mathematically", "difference between"
+    ]
+    has_complex_keyword = any(kw in query_lower for kw in complex_keywords)
+    return "complex" if (word_count > 15 or has_complex_keyword) else "simple"
 
 
-# ---- Call Fireworks API with the chosen model ----
+# ----------------------------------------------------------------
+# STEP 2: CALL MODEL
+# ----------------------------------------------------------------
 def call_model(model, query):
+    time.sleep(3)
     data = {
         "model": model,
-        "messages": [
-            {"role": "user", "content": query}
-        ]
+        "messages": [{"role": "user", "content": query}]
     }
     response = requests.post(fireworks_url, headers=fireworks_headers, json=data)
     return response.json()
 
 
-# ---- The actual routing agent ----
-USE_AI_CLASSIFIER = False
+# ----------------------------------------------------------------
+# STEP 3: LOCAL CONFIDENCE SCORING
+# Analyzes the response without an extra API call.
+#
+# Scoring logic:
+#   Start at 8 (assume decent answer)
+#   -3 if answer contains uncertainty phrases
+#   -2 if answer is short AND route is complex (short complex answer = suspicious)
+#   -1 if simple model answered a query with complex keywords
+#   +1 if complex model answered (inherently more reliable)
+# ----------------------------------------------------------------
+def score_confidence(route, query, answer):
+    score = 8  # baseline
 
+    answer_lower = answer.lower()
+    word_count = len(answer.split())
+
+    # Penalty: model expressed uncertainty
+    uncertainty_phrases = [
+        "i'm not sure", "i am not sure", "i don't know",
+        "i cannot", "i can't", "not certain", "unclear",
+        "it depends", "you may want to verify", "consult a",
+        "i would recommend checking", "i'm unable"
+    ]
+    if any(phrase in answer_lower for phrase in uncertainty_phrases):
+        score -= 3
+        print(f"  [Confidence] Uncertainty phrase detected -> -3")
+
+    # Penalty: short answer on a complex-routed query
+    # Simple routes are EXEMPT — "4" is a perfect answer to "What is 2+2?"
+    if word_count < 10 and route != "simple":
+        score -= 2
+        print(f"  [Confidence] Short answer on complex query ({word_count} words) -> -2")
+
+    # Penalty: simple model handled a keyword-heavy query
+    complex_keywords = [
+        "explain", "mathematically", "analyze", "compare",
+        "tradeoff", "mechanism", "architecture"
+    ]
+    query_lower = query.lower()
+    has_complex_keyword = any(kw in query_lower for kw in complex_keywords)
+    if route == "simple" and has_complex_keyword:
+        score -= 1
+        print(f"  [Confidence] Simple model on complex keyword query -> -1")
+
+    # Bonus: complex model used
+    if route == "complex":
+        score += 1
+        print(f"  [Confidence] Complex model used -> +1")
+
+    return max(1, min(10, score))
+
+
+# ----------------------------------------------------------------
+# STEP 4: BUDGET CHECK
+# ----------------------------------------------------------------
+def budget_check(estimated_tokens, route):
+    estimated_cost = estimated_tokens * COST_PER_TOKEN[route]
+    return session["budget_remaining"] >= estimated_cost
+
+
+def update_budget(tokens, route):
+    cost = tokens * COST_PER_TOKEN[route]
+    session["budget_remaining"] -= cost
+    session["total_cost"] += cost
+    session["total_tokens"] += tokens
+    return cost
+
+
+# ----------------------------------------------------------------
+# MAIN ROUTING AGENT
+# ----------------------------------------------------------------
 def route_query(query):
-    if USE_AI_CLASSIFIER:
-        route = classify_query_ai(query)
-    else:
-        route = classify_query_rules(query)
+    print(f"\n{'='*62}")
+    print(f"Query      : {query}")
 
-    model = get_model_for_route(route)
+    # --- Classify ---
+    route = classify_query(query)
+    model = SIMPLE_MODEL if route == "simple" else COMPLEX_MODEL
+    model_name = model.split("/")[-1]
 
-    print(f"\nQuery: {query}")
-    print(f"Route decided: {route.upper()} -> using model: {model}")
+    budget_pct = (session["budget_remaining"] / TOTAL_BUDGET) * 100
+    print(f"Classifier : AI -> {route.upper()}")
+    print(f"Budget     : ${session['budget_remaining']:.5f} remaining ({budget_pct:.0f}% left)")
 
+    # --- Budget gate ---
+    if not budget_check(500, route):
+        print("BUDGET EXHAUSTED - skipping query.")
+        return
+
+    # --- First model call ---
+    print(f"Model      : {model_name}")
     result = call_model(model, query)
 
     try:
         answer = result["choices"][0]["message"]["content"]
-        tokens_used = result["usage"]["total_tokens"]
-        print(f"Response: {answer}")
-        print(f"Tokens used: {tokens_used}")
-    except KeyError:
-        print("Error from API:", result)
+        tokens = result["usage"]["total_tokens"]
+    except (KeyError, TypeError):
+        print(f"API Error  : {result}")
+        return
+
+    cost = update_budget(tokens, route)
+
+    full_cost = tokens * COST_PER_TOKEN["complex"]
+    saved = full_cost - cost if route == "simple" else 0.0
+    session["total_saved"] += saved
+
+    display = answer[:250] + "..." if len(answer) > 250 else answer
+    print(f"\nResponse   : {display}")
+
+    # --- Local confidence scoring (no API call) ---
+    confidence = score_confidence(route, query, answer)
+    confident = confidence >= CONFIDENCE_THRESHOLD
+
+    escalated = False
+    final_model = model_name
+
+    if confident:
+        print(f"Confidence : {confidence}/10 [ACCEPTED]")
+    else:
+        print(f"Confidence : {confidence}/10 [LOW] - escalating to DeepSeek...")
+
+        if not budget_check(800, "complex"):
+            print("Not enough budget to escalate - using original answer.")
+        else:
+            escalated_result = call_model(COMPLEX_MODEL, query)
+            try:
+                final_answer = escalated_result["choices"][0]["message"]["content"]
+                esc_tokens = escalated_result["usage"]["total_tokens"]
+            except (KeyError, TypeError):
+                print(f"Escalation Error: {escalated_result}")
+            else:
+                esc_cost = update_budget(esc_tokens, "complex")
+                esc_confidence = score_confidence("complex", query, final_answer)
+                esc_display = final_answer[:250] + "..." if len(final_answer) > 250 else final_answer
+
+                print(f"Model      : deepseek-v4-pro (escalated)")
+                print(f"Response   : {esc_display}")
+                print(f"Confidence : {esc_confidence}/10 [ESCALATED - ACCEPTED]")
+                print(f"Tokens     : {esc_tokens} | Cost: ${esc_cost:.6f}")
+                final_model = "deepseek-v4-pro"
+                escalated = True
+                session["escalated_count"] += 1
+
+    # --- Update session counts ---
+    session["total_queries"] += 1
+    if route == "simple":
+        session["simple_count"] += 1
+    else:
+        session["complex_count"] += 1
+
+    print(f"\nTokens     : {tokens} | Cost: ${cost:.6f}", end="")
+    if saved > 0:
+        print(f" | Saved: ${saved:.6f}", end="")
+    print()
+
+    session["log"].append({
+        "query":     query,
+        "route":     route,
+        "model":     final_model,
+        "escalated": escalated,
+        "tokens":    tokens,
+        "cost":      cost,
+        "saved":     saved,
+    })
 
 
-# ---- Test it ----
+# ----------------------------------------------------------------
+# SESSION SUMMARY
+# ----------------------------------------------------------------
+def print_summary():
+    print(f"\n{'='*62}")
+    print("SESSION SUMMARY")
+    print(f"{'='*62}")
+    print(f"Total queries    : {session['total_queries']}")
+    print(f"Simple routed    : {session['simple_count']}")
+    print(f"Complex routed   : {session['complex_count']}")
+    print(f"Escalated        : {session['escalated_count']}  <- rescued from low-confidence answers")
+    print(f"Total tokens     : {session['total_tokens']}")
+    print(f"Total cost       : ${session['total_cost']:.6f}")
+    print(f"Total saved      : ${session['total_saved']:.6f}  (vs always using DeepSeek)")
+    print(f"Budget used      : ${TOTAL_BUDGET - session['budget_remaining']:.5f} / ${TOTAL_BUDGET:.2f}")
+    print(f"Budget remaining : ${session['budget_remaining']:.5f} ({(session['budget_remaining']/TOTAL_BUDGET)*100:.0f}% left)")
+    if session["total_queries"] > 0:
+        avg = session["total_tokens"] / session["total_queries"]
+        print(f"Avg tokens/query : {avg:.0f}")
+    if session["escalated_count"] > 0:
+        print(f"\nEscalation log (queries rescued from low-confidence answers):")
+        for entry in session["log"]:
+            if entry["escalated"]:
+                print(f"   -> \"{entry['query'][:55]}\"")
+    print(f"{'='*62}")
+
+
+# ----------------------------------------------------------------
+# TEST QUERIES
+# ----------------------------------------------------------------
 test_queries = [
+    # Clearly simple
     "What is 2+2?",
     "What's the capital of France?",
+    "What year did World War 2 end?",
+    "Hi",
+
+    # Edge cases
+    "Define recursion",
+    "Why do stars twinkle?",
+    "Explain quantum entanglement mathematically",
+
+    # Clearly complex
     "Explain how neural networks learn and why backpropagation works",
     "Compare Python and Java for beginners in terms of learning curve",
-    "Why do stars twinkle?"
+    "Analyze the tradeoffs between SQL and NoSQL databases for a high-traffic web application",
 ]
 
 for q in test_queries:
     route_query(q)
+
+print_summary()
