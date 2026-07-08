@@ -65,22 +65,22 @@ If confidence < 7, the query automatically escalates to DeepSeek-V4-Pro.
 
 ## Results
 
-**10/10 queries correctly routed. 0 unnecessary escalations. Budget used: $0.030 / $0.05 (39% remaining).**
+**10/10 queries correctly routed. 0 unnecessary escalations. Budget used: $0.030 / $0.50 (94% remaining).**
 
 | Query | Route | Model | Tokens | Confidence | Correct? |
 |---|---|---|---|---|---|
-| "What is 2+2?" | SIMPLE | Qwen3.7 Plus | 208 | 8/10 | ✅ |
+| "What is 2+2?" | SIMPLE | Qwen3.7 Plus | 310 | 8/10 | ✅ |
 | "Capital of France?" | SIMPLE | Qwen3.7 Plus | 132 | 8/10 | ✅ |
-| "What year did WW2 end?" | SIMPLE | Qwen3.7 Plus | 302 | 8/10 | ✅ |
-| "Hi" | SIMPLE | Qwen3.7 Plus | 267 | 8/10 | ✅ |
-| "Define recursion" | SIMPLE | Qwen3.7 Plus | 1,556 | 8/10 | ✅ |
-| "Why do stars twinkle?" | COMPLEX | DeepSeek-V4-Pro | 858 | 9/10 | ✅ |
-| "Explain quantum entanglement..." | COMPLEX | DeepSeek-V4-Pro | 2,697 | 9/10 | ✅ |
-| "Explain neural networks + backprop" | COMPLEX | DeepSeek-V4-Pro | 2,226 | 9/10 | ✅ |
-| "Compare Python and Java..." | COMPLEX | DeepSeek-V4-Pro | 2,000 | 9/10 | ✅ |
-| "Analyze SQL vs NoSQL..." | COMPLEX | DeepSeek-V4-Pro | 2,624 | 9/10 | ✅ |
+| "What year did WW2 end?" | SIMPLE | Qwen3.7 Plus | 520 | 8/10 | ✅ |
+| "Hi" | SIMPLE | Qwen3.7 Plus | 274 | 8/10 | ✅ |
+| "Define recursion" | SIMPLE | Qwen3.7 Plus | 1,735 | 8/10 | ✅ |
+| "Why do stars twinkle?" | COMPLEX | DeepSeek-V4-Pro | 224 | 9/10 | ✅ |
+| "Explain quantum entanglement..." | COMPLEX | DeepSeek-V4-Pro | 1,936 | 9/10 | ✅ |
+| "Explain neural networks + backprop" | COMPLEX | DeepSeek-V4-Pro | 3,108 | 9/10 | ✅ |
+| "Compare Python and Java..." | COMPLEX | DeepSeek-V4-Pro | 1,867 | 9/10 | ✅ |
+| "Analyze SQL vs NoSQL..." | COMPLEX | DeepSeek-V4-Pro | 2,804 | 9/10 | ✅ |
 
-Simple queries average **293 tokens**. Complex queries average **2,241 tokens**. RouteWise saves ~**7x tokens** on simple queries by routing them away from the heavy model.
+Simple queries average **594 tokens**. Complex queries average **1,988 tokens**. RouteWise saves ~**3x tokens** on simple queries by routing them away from the heavy model.
 
 ---
 
@@ -91,8 +91,8 @@ If a system runs 10,000 queries/day with a 50/50 simple/complex split:
 | Approach | Daily tokens | Daily cost (est.) |
 |---|---|---|
 | Always DeepSeek-V4-Pro | ~25,000,000 | ~$67.50 |
-| RouteWise hybrid routing | ~12,500,000 | ~$33.75 |
-| **Saving** | **~12,500,000** | **~$33.75/day** |
+| RouteWise hybrid routing | ~12,900,000 | ~$34.75 |
+| **Saving** | **~12,100,000** | **~$32.75/day** |
 
 ---
 
@@ -112,9 +112,9 @@ The AI classifier (Qwen3.7 Plus) handles classification well but can fail under 
 
 ## Known Limitations
 
-- Confidence scoring is heuristic — a short but correct answer (e.g. "4") on a simple route is treated correctly, but edge cases exist
+- Confidence scoring is heuristic — edge cases exist where a short but correct answer on a simple route could be misscored
 - Budget tracking uses estimated token counts for gate checks; actual spend may slightly exceed budget on the final query
-- Rate limiting on the Fireworks free tier requires delays between calls, slowing batch processing
+- Classifier and response model are currently the same (Qwen3.7 Plus) — a dedicated lightweight classifier would improve separation of concerns
 
 ---
 
@@ -158,25 +158,25 @@ docker run --env-file .env routewise
 ==============================================================
 Query      : What is 2+2?
 Classifier : AI -> SIMPLE
-Budget     : $0.05000 remaining (100% left)
+Budget     : $0.50000 remaining (100% left)
 Model      : qwen3p7-plus
 
-Response   : 4
+Response   : 2 + 2 equals 4.
 Confidence : 8/10 [ACCEPTED]
 
-Tokens     : 208 | Cost: $0.000187 | Saved: $0.000374
+Tokens     : 310 | Cost: $0.000279 | Saved: $0.000558
 
 ==============================================================
 Query      : Explain how neural networks learn and why backpropagation works
 Classifier : AI -> COMPLEX
-Budget     : $0.03818 remaining (76% left)
+Budget     : $0.49149 remaining (98% left)
 Model      : deepseek-v4-pro
 
 Response   : Neural networks learn by adjusting their internal parameters...
   [Confidence] Complex model used -> +1
 Confidence : 9/10 [ACCEPTED]
 
-Tokens     : 2226 | Cost: $0.006010
+Tokens     : 3108 | Cost: $0.008392
 
 ==============================================================
 SESSION SUMMARY
@@ -185,12 +185,12 @@ Total queries    : 10
 Simple routed    : 5
 Complex routed   : 5
 Escalated        : 0  <- rescued from low-confidence answers
-Total tokens     : 12870
-Total cost       : $0.030312
-Total saved      : $0.004437  (vs always using DeepSeek)
-Budget used      : $0.03031 / $0.05
-Budget remaining : $0.01969 (39% left)
-Avg tokens/query : 1287
+Total tokens     : 12910
+Total cost       : $0.029509
+Total saved      : $0.005348  (vs always using DeepSeek)
+Budget used      : $0.02951 / $0.50
+Budget remaining : $0.47049 (94% left)
+Avg tokens/query : 1291
 ==============================================================
 ```
 
