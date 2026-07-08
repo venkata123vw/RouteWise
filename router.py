@@ -1,6 +1,5 @@
 from dotenv import load_dotenv
 import os
-import time
 import requests
 
 load_dotenv()
@@ -27,7 +26,7 @@ COST_PER_TOKEN = {
 CONFIDENCE_THRESHOLD = 7
 
 # ---- Budget (USD) ----
-TOTAL_BUDGET = 0.05
+TOTAL_BUDGET = 0.50
 
 # ---- Session state ----
 session = {
@@ -45,9 +44,9 @@ session = {
 
 # ----------------------------------------------------------------
 # STEP 1: AI CLASSIFIER
+# Uses lightweight model to decide simple vs complex
 # ----------------------------------------------------------------
 def classify_query(query):
-    time.sleep(2)
     data = {
         "model": SIMPLE_MODEL,
         "messages": [
@@ -96,7 +95,6 @@ def classify_query_rules(query):
 # STEP 2: CALL MODEL
 # ----------------------------------------------------------------
 def call_model(model, query):
-    time.sleep(3)
     data = {
         "model": model,
         "messages": [{"role": "user", "content": query}]
@@ -112,17 +110,16 @@ def call_model(model, query):
 # Scoring logic:
 #   Start at 8 (assume decent answer)
 #   -3 if answer contains uncertainty phrases
-#   -2 if answer is short AND route is complex (short complex answer = suspicious)
-#   -1 if simple model answered a query with complex keywords
-#   +1 if complex model answered (inherently more reliable)
+#   -2 if short answer on a complex-routed query
+#   -1 if simple model handled a complex-keyword query
+#   +1 if complex model was used
 # ----------------------------------------------------------------
 def score_confidence(route, query, answer):
-    score = 8  # baseline
+    score = 8
 
     answer_lower = answer.lower()
     word_count = len(answer.split())
 
-    # Penalty: model expressed uncertainty
     uncertainty_phrases = [
         "i'm not sure", "i am not sure", "i don't know",
         "i cannot", "i can't", "not certain", "unclear",
@@ -133,13 +130,10 @@ def score_confidence(route, query, answer):
         score -= 3
         print(f"  [Confidence] Uncertainty phrase detected -> -3")
 
-    # Penalty: short answer on a complex-routed query
-    # Simple routes are EXEMPT — "4" is a perfect answer to "What is 2+2?"
     if word_count < 10 and route != "simple":
         score -= 2
         print(f"  [Confidence] Short answer on complex query ({word_count} words) -> -2")
 
-    # Penalty: simple model handled a keyword-heavy query
     complex_keywords = [
         "explain", "mathematically", "analyze", "compare",
         "tradeoff", "mechanism", "architecture"
@@ -150,7 +144,6 @@ def score_confidence(route, query, answer):
         score -= 1
         print(f"  [Confidence] Simple model on complex keyword query -> -1")
 
-    # Bonus: complex model used
     if route == "complex":
         score += 1
         print(f"  [Confidence] Complex model used -> +1")
@@ -215,7 +208,7 @@ def route_query(query):
     display = answer[:250] + "..." if len(answer) > 250 else answer
     print(f"\nResponse   : {display}")
 
-    # --- Local confidence scoring (no API call) ---
+    # --- Confidence scoring ---
     confidence = score_confidence(route, query, answer)
     confident = confidence >= CONFIDENCE_THRESHOLD
 
